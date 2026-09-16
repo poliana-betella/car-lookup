@@ -1,0 +1,16 @@
+[general]
+name=CAR Lookup
+qgisMinimumVersion=3.16
+description=Baixa o poligono de um imovel do CAR/SICAR pelo codigo, direto em GeoJSON, sem passar pelo mapa nem baixar zip do municipio inteiro.
+version=1.0.0
+author=Poliana Betella
+email=betella.poliana@gmail.com
+about=Consulta o geoservico publico do SICAR (WFS) e baixa a geometria de um imovel rural a partir do numero do CAR, salvando como .geojson (nao compactado) e carregando o layer direto no QGIS. Descobre automaticamente a camada e o campo de codigo corretos (por UF) na primeira execucao e lembra da escolha nas consultas seguintes.
+category=Web
+tags=car,sicar,cadastro ambiental rural,wfs,geojson,codigo florestal
+homepage=https://github.com/poliana-betella/car-lookup
+tracker=https://github.com/poliana-betella/car-lookup/issues
+repository=https://github.com/poliana-betella/car-lookup
+experimental=False
+deprecated=False
+server=False
