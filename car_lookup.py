@@ -19,12 +19,12 @@ from qgis.PyQt.QtWidgets import (
     QMessageBox,
     QApplication,
 )
-from qgis.PyQt.QtGui import QIcon
 from qgis.core import QgsVectorLayer, QgsProject, QgsSettings, QgsMessageLog, Qgis
 
 WFS_BASE = "https://geoserver.car.gov.br/geoserver/sicar/wfs"
 SETTINGS_TYPENAME_BY_UF = "car_lookup/typename_by_uf"  # JSON: {"MG": "sicar:AREA_IMOVEL_MG", ...}
 SETTINGS_FIELD_BY_TYPENAME = "car_lookup/field_by_typename"  # JSON: {typename: "cod_imovel"}
+SETTINGS_SSL_MODE = "car_lookup/ssl_mode"
 LOG_TAG = "CAR Lookup"
 
 UF_SET = {
@@ -67,7 +67,11 @@ def _build_ssl_contexts():
     Alguns servidores do governo (o do CAR entre eles) usam configuracoes
     de TLS/cifras antigas que o OpenSSL 3 recusa por padrao (SECLEVEL 2).
     Aqui montamos uma lista de contextos, do mais restrito ao mais
-    permissivo, e tentamos em ordem ate um funcionar.
+    compativel, e tentamos em ordem ate um funcionar.
+
+    Todos os contextos VERIFICAM o certificado do servidor e o nome do host.
+    Desde a v1.0.1 o modo sem verificacao nao e mais automatico nem fica salvo:
+    so e usado se o usuario autorizar explicitamente, e apenas na sessao atual.
     """
     contexts = []
 
@@ -89,25 +93,25 @@ def _build_ssl_contexts():
         pass
     contexts.append(("seclevel1_tls1", ctx3))
 
-    ctx4 = ssl._create_unverified_context()
-    try:
-        ctx4.set_ciphers("DEFAULT@SECLEVEL=1")
-    except Exception:
-        pass
-    contexts.append(("sem_verificacao", ctx4))
-
     return contexts
 
 
 def _http_get(url, timeout=40):
     settings = QgsSettings()
-    preferred = settings.value("car_lookup/ssl_mode", None)
     contexts = _build_ssl_contexts()
+    valid_labels = {label for label, _ in contexts}
+
+    preferred = settings.value(SETTINGS_SSL_MODE, None)
+    if preferred and preferred not in valid_labels:
+        # Modo salvo por versao antiga (ex.: "sem_verificacao"): descarta.
+        settings.remove(SETTINGS_SSL_MODE)
+        preferred = None
 
     if preferred:
         contexts.sort(key=lambda item: 0 if item[0] == preferred else 1)
 
     last_error = None
+    cert_error = None
     for label, ctx in contexts:
         try:
             req = urllib.request.Request(
@@ -115,16 +119,70 @@ def _http_get(url, timeout=40):
             )
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
                 data = resp.read()
-            settings.setValue("car_lookup/ssl_mode", label)
+            settings.setValue(SETTINGS_SSL_MODE, label)
             return data
         except Exception as e:
             last_error = e
+            if _is_cert_error(e):
+                cert_error = e
             QgsMessageLog.logMessage(
                 f"Falha de conexao com modo SSL '{label}': {e}", LOG_TAG, level=Qgis.Info
             )
             continue
 
+    if cert_error is not None:
+        # Nao seguimos sem verificacao por conta propria: perguntamos ao
+        # usuario, a cada sessao do QGIS, e nunca salvamos essa escolha.
+        global _insecure_allowed_this_session
+        if _insecure_allowed_this_session is None:
+            QApplication.setOverrideCursor(Qt.ArrowCursor)
+            try:
+                _insecure_allowed_this_session = _ask_insecure_consent(cert_error)
+            finally:
+                QApplication.restoreOverrideCursor()
+        if _insecure_allowed_this_session:
+            ctx = ssl._create_unverified_context()
+            try:
+                ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+            except Exception:
+                pass
+            QgsMessageLog.logMessage(
+                "Conexao SEM verificacao de certificado autorizada pelo usuario nesta sessao.",
+                LOG_TAG, level=Qgis.Warning,
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "QGIS-CAR-Lookup-Plugin"})
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                return resp.read()
+        raise ConnectionError(
+            "O certificado de seguranca do geoservico do CAR nao pode ser verificado "
+            "e a conexao foi interrompida. Verifique a data/hora do computador e se a "
+            "rede (proxy/antivirus) nao esta interceptando conexoes HTTPS."
+        ) from cert_error
     raise last_error
+
+
+_insecure_allowed_this_session = None  # None = ainda nao perguntado
+
+
+def _is_cert_error(err):
+    return isinstance(err, ssl.SSLCertVerificationError) or isinstance(
+        getattr(err, "reason", None), ssl.SSLCertVerificationError
+    )
+
+
+def _ask_insecure_consent(err):
+    resp = QMessageBox.warning(
+        None,
+        "CAR Lookup - certificado nao verificado",
+        "Nao foi possivel verificar o certificado de seguranca do geoservico do CAR.\n\n"
+        "Isso pode ser so uma configuracao incompleta do servidor do governo, mas "
+        "tambem pode indicar que alguem na rede esta interceptando a conexao.\n\n"
+        "Deseja continuar SEM verificacao apenas nesta sessao do QGIS? (nao recomendado)\n\n"
+        f"Detalhe tecnico: {err}",
+        QMessageBox.Yes | QMessageBox.No,
+        QMessageBox.No,
+    )
+    return resp == QMessageBox.Yes
 
 
 class CarLookupPlugin:
@@ -134,7 +192,6 @@ class CarLookupPlugin:
         self.menu = "&CAR Lookup"
 
     def initGui(self):
-        icon = QIcon()  # sem icone customizado; usa o padrao do Qt
         self.action = QAction("Baixar imovel do CAR por codigo...", self.iface.mainWindow())
         self.action.triggered.connect(self.run)
         self.iface.addToolBarIcon(self.action)

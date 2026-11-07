@@ -8,7 +8,7 @@ Você informa o código do CAR (com ou sem pontuação). O plugin extrai a UF a 
 
 Camada e campo descobertos ficam salvos localmente (nas configurações do QGIS) para as próximas consultas do mesmo estado não precisarem repetir a descoberta. Um comando de menu permite limpar esse cache e redetectar do zero, caso o serviço do CAR mude alguma coisa no futuro.
 
-O plugin também tenta contornar, automaticamente, um problema comum de TLS em geoserviços de governo (cifras/versões mais antigas que o OpenSSL recente recusa por padrão), testando alguns níveis de compatibilidade em sequência até um funcionar.
+O plugin também tenta contornar, automaticamente, um problema comum de TLS em geoserviços de governo (cifras/versões mais antigas que o OpenSSL recente recusa por padrão), testando alguns níveis de compatibilidade em sequência até um funcionar. Em todos eles o certificado do servidor continua sendo verificado: se ele não puder ser validado, o plugin avisa e só segue sem verificação se você autorizar (apenas para a sessão atual do QGIS).
 
 ## Uso
 
